@@ -8,7 +8,9 @@
     body { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; font: 1rem/1.5 system-ui, sans-serif; }
     textarea { box-sizing: border-box; display: block; width: 100%; margin: .5rem 0; padding: .5rem; font: inherit; }
     button { padding: .4rem .8rem; font: inherit; }
-    pre { white-space: pre-wrap; }
+    #result { margin-top: 1rem; }
+    .draft { white-space: pre-wrap; padding: .5rem; border: 1px solid #ccc; border-radius: 4px; }
+    .warning { padding: .5rem; background: #fff4e5; border: 1px solid #f0b46c; border-radius: 4px; }
   </style>
 </head>
 <body>
@@ -18,18 +20,56 @@
     <textarea id="message" rows="4"></textarea>
     <button type="submit">Разобрать заявку</button>
   </form>
-  <pre id="result" aria-live="polite"></pre>
+  <div id="result" aria-live="polite"></div>
   <script type="module">
+    const TOPIC_LABELS = { delivery: "Доставка", pricing: "Цены", other: "Другое" };
     const form = document.querySelector("form");
     const result = document.querySelector("#result");
+    let lastRequestId = 0;
+
+    function show(...nodes) {
+      result.replaceChildren(...nodes);
+    }
+
+    function el(tag, text, className) {
+      const node = document.createElement(tag);
+      node.textContent = text;
+      if (className) node.className = className;
+      return node;
+    }
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const reply = await fetch("/api/triage", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: document.querySelector("#message").value }),
-      });
-      result.textContent = JSON.stringify(await reply.json(), null, 2);
+      // Only the latest request may update the screen, a late answer to an older one is dropped.
+      const requestId = ++lastRequestId;
+      show(el("p", "Разбираем заявку..."));
+
+      let body;
+      try {
+        const reply = await fetch("/api/triage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: document.querySelector("#message").value }),
+        });
+        body = await reply.json();
+      } catch {
+        body = { status: "network_error" };
+      }
+      if (requestId !== lastRequestId) return;
+
+      if (body.status === "ready") {
+        show(
+          el("p", `Тема: ${TOPIC_LABELS[body.topic] ?? body.topic}`),
+          el("p", "Черновик ответа (проверьте перед отправкой):"),
+          el("div", body.draft, "draft"),
+        );
+      } else if (body.status === "manual_review") {
+        show(el("p", "Не удалось разобрать заявку автоматически. Определите тему и напишите ответ вручную.", "warning"));
+      } else if (body.status === "invalid_input") {
+        show(el("p", "Введите текст заявки.", "warning"));
+      } else {
+        show(el("p", "Сервис сейчас недоступен. Попробуйте ещё раз или разберите заявку вручную.", "warning"));
+      }
     });
   </script>
 </body>
